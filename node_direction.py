@@ -9,9 +9,10 @@ colors = {
     "white": (255, 255, 255),
     "blue": (0, 0, 255),
     "red": (255, 0, 0),
-    "green": (0, 255, 0),
+    "green": (0, 255, 0),  # Path nodes
     "yellow": (255, 255, 0),
-    "purple": (128, 0, 128),  # Color for intermediate nodes
+    "purple": (128, 0, 128),  # Intermediate (path) nodes
+    "orange": (255, 165, 0),  # Side nodes
 }
 
 # Maze settings
@@ -31,8 +32,7 @@ def load_maze(filename="saved_maze.json"):
     walls = set(tuple(cell) for cell in data["walls"])
     start = tuple(data["start"]) if data["start"] else None
     target = tuple(data["target"]) if data["target"] else None
-    nodes = {key: tuple(value) for key, value in data.get("nodes", {}).items()}  # Convert nodes to tuple
-
+    nodes = {key: tuple(value) for key, value in data.get("nodes", {}).items()}
     return walls, start, target, nodes
 
 # A* Algorithm for pathfinding
@@ -54,11 +54,13 @@ def a_star(walls, start, target, nodes):
             path.append(start)
             path.reverse()
 
-            # Find and print intermediate nodes along the path
+            # Intermediate nodes directly on the path
             intermediate_nodes = [node_name for node_name, coords in nodes.items() if coords in path]
-            print("Intermediate Nodes:", intermediate_nodes)
 
-            return path, intermediate_nodes
+            # Side nodes (nodes close to the path but not on it)
+            side_nodes = [node_name for node_name, coords in nodes.items() if coords not in path and any(heuristic(coords, p) <= 4 for p in path)]
+
+            return path, intermediate_nodes, side_nodes
 
         for neighbor in get_neighbors(current):
             if neighbor in walls:
@@ -70,7 +72,7 @@ def a_star(walls, start, target, nodes):
                 f_score[neighbor] = g_score[neighbor] + heuristic(neighbor, target)
                 heapq.heappush(open_list, (f_score[neighbor], neighbor))
 
-    return [], []
+    return [], [], []
 
 # Manhattan Distance heuristic function
 def heuristic(a, b):
@@ -82,23 +84,66 @@ def get_neighbors(node):
     neighbors = [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]
     return [(nx, ny) for nx, ny in neighbors if 0 <= nx < grid_size and 0 <= ny < grid_size]
 
-# Main function to visualize the maze and pathfinding
+# Determine movement direction
+def get_direction(reference_path, curr_node):
+    """
+    Determines the movement direction of `curr_node` based on the reference path.
+
+    Returns: "Straight", "Left", or "Right".
+    """
+    if curr_node in reference_path:
+        return "Straight"  # Node is part of the path → Straight
+
+    # Find the closest path point
+    min_distance = float("inf")
+    closest_point = None
+    for path_point in reference_path:
+        distance = heuristic(curr_node, path_point)
+        if distance < min_distance:
+            min_distance = distance
+            closest_point = path_point
+
+    if closest_point is None:
+        return "Unknown"  # Should never happen
+
+    # Determine direction based on relative position to the path
+    dx = curr_node[0] - closest_point[0]
+    dy = curr_node[1] - closest_point[1]
+
+    if abs(dx) > abs(dy):  # Greater difference in X → Left/Right
+        return "Left" if dx < 0 else "Right"
+    else:  # Greater difference in Y → Up/Down
+        return "Left" if dy < 0 else "Right"
+
+# Main function to visualize and print directions for all nodes
 def main():
     walls, start, target, nodes = load_maze()
 
     if not start or not target:
-        print("Start or Target is missing in the maze. Please set both in the saved JSON.")
-        pygame.quit()
+        print("Start or Target is missing in the maze.")
         return
 
-    path, intermediate_nodes = a_star(walls, start, target, nodes)
+    path, intermediate_nodes, side_nodes = a_star(walls, start, target, nodes)  # Step 1: Find path
+    path_set = set(path)  # Convert path to set for fast lookup
 
-    # Prepare for capturing frames
-    frames = []
-    current_position = start
-    path_index = 0  # To track the current path index
+    # Step 2: Collect all nodes in the path or nearby (side nodes)
+    node_directions = {}  # Store directions of nodes
+
+    # Assign directions to intermediate (path) nodes
+    for node in intermediate_nodes:
+        node_directions[node] = get_direction(path_set, nodes[node])
+
+    # Assign directions to side nodes
+    for node in side_nodes:
+        node_directions[node] = get_direction(path_set, nodes[node])
+
+    # Print directions
+    print("\n=== Node Directions (Path & Side Nodes) ===")
+    for node, direction in node_directions.items():
+        print(f"{node}: {direction}")
+
+    # Step 3: Pygame Visualization
     running = True
-
     while running:
         screen.fill(colors["black"])
 
@@ -112,43 +157,26 @@ def main():
         for wall in walls:
             pygame.draw.rect(screen, colors["white"], pygame.Rect(wall[0] * cell_size, wall[1] * cell_size, cell_size, cell_size))
 
-        # Draw start and target positions
+        # Draw start and target
         pygame.draw.rect(screen, colors["blue"], pygame.Rect(start[0] * cell_size, start[1] * cell_size, cell_size, cell_size))
         pygame.draw.rect(screen, colors["red"], pygame.Rect(target[0] * cell_size, target[1] * cell_size, cell_size, cell_size))
 
-        # Draw intermediate nodes
+        # Draw intermediate (path) nodes
         for node in intermediate_nodes:
             x, y = nodes[node]
             pygame.draw.rect(screen, colors["purple"], pygame.Rect(x * cell_size, y * cell_size, cell_size, cell_size))
 
-        # Draw the path so far (green)
-        for i in range(path_index + 1):
-            pygame.draw.rect(screen, colors["green"], pygame.Rect(path[i][0] * cell_size, path[i][1] * cell_size, cell_size, cell_size))
+        # Draw side nodes (cyan)
+        for node in side_nodes:
+            x, y = nodes[node]
+            pygame.draw.rect(screen, colors["orange"], pygame.Rect(x * cell_size, y * cell_size, cell_size, cell_size))
 
-        # Draw the current position of the moving point (yellow)
-        pygame.draw.rect(screen, colors["yellow"], pygame.Rect(current_position[0] * cell_size, current_position[1] * cell_size, cell_size, cell_size))
+        pygame.display.flip()
 
-        # Capture the current frame
-        frame = pygame.surfarray.array3d(pygame.display.get_surface())  # Convert surface to array
-        frames.append(frame)
-
-        # Move to the next point in the path
-        if current_position != target:
-            # Update the path index and move to the next step
-            path_index += 1
-            current_position = path[path_index]
-            pygame.display.flip()
-        else:
-            break
-
-        # To stop the window from freezing and allow user to quit
+        # Handle quit event
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
-
-    # Convert frames to images and save as GIF using Pillow
-    images = [Image.fromarray(frame) for frame in frames]
-    images[0].save("pathfinding.gif", save_all=True, append_images=images[1:], loop=0, duration=200)
 
     pygame.quit()
 
